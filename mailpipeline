@@ -1,0 +1,167 @@
+def Pipeline_Message
+node {
+ try  {
+ notify('Job Started') 
+
+     
+  stage('Git-Checkout') {
+   git 'https://github.com/sowmya-satya/project-301.git'
+  }
+    
+ def project_path="01-Jenkins/Code/petclinic"
+ 
+ dir(project_path) {
+    
+  stage('Maven-Clean') {
+  
+  script
+			{
+				Pipeline_Message=env.STAGE_NAME
+				echo "Cleaning old packages"
+  
+				sh label: '', script: 'mvn clean'
+			}
+  
+  
+  }
+    
+ stage('Maven-Compile') {
+ 
+ script 
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Maven Compile"
+				
+				sh label: '', script: 'mvn compile'
+            }
+   
+  }
+  
+  stage('Sonar Analysis'){
+        withSonarQubeEnv('SonarQube'){
+		
+		 script 
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Sonar Analysis"
+				
+				 sh 'mvn sonar:sonar'
+            }
+        
+        }
+ }
+
+   stage("Quality Gate") 
+    {
+	
+	script 
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Quality gate"
+            }
+            timeout(time: 1, unit: 'HOURS') 
+            {
+                waitForQualityGate abortPipeline: true
+            }
+	}
+  
+   stage('Maven-Test') {
+   
+   script 
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Maven Testing"
+				
+				sh label: '', script: 'mvn test'
+            }
+   
+  
+  }
+  
+   stage('Maven-Package') {
+   
+   script 
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Package and Install"
+				
+				sh label: '', script: 'mvn package'
+            }
+   
+  }
+  
+  stage('Jfrog Artifacory Upload') {
+  
+   script
+            {
+                Pipeline_Message=env.STAGE_NAME
+				echo "Uploaded to Jfrog Artifactory"
+				def server= Artifactory.server 'Artifactory'
+                    def uploadSpec= """{
+                        "files": [{
+                        "pattern": "target/*.war",
+                        "target": "project1"}]
+                    }"""
+        server.upload(uploadSpec)
+        
+        }
+	}
+
+   stage('Docker-Stage-Deployment') {
+   
+    script
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Docker compose build"
+				
+				 sh label: '', script: 'docker-compose up -d --build'
+            }
+  }
+  
+   stage('Deploy Approval') {
+	input "Deploy to prod?"
+	}
+ 
+  stage('Getting Ready For Ansible') {
+	script
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Getting ready for ansible"
+	
+				sh label: 'Docker', script: 'cp -rf target/*.war ../../../04-Terraform/03-Ansible-Deploy/ansible/04-Tomcat/templates/'
+			}  
+   
+ }
+
+def project_terra="04-Terraform/03-Ansible-Deploy"
+dir(project_terra) {
+   stage('Prod Deployment on AWS'){
+   
+   script
+            {
+                Pipeline_Message=env.STAGE_NAME
+                echo "Prod Deployment on AWS"
+   sh label: 'terraform', script: '/bin/terraform  init'
+   sh label: 'terraform', script: '/bin/terraform  apply -input=false -auto-approve'
+			}
+								}	
+}
+
+notify('Job Completed')   
+} catch (err) {
+  notify("Error ${err}")
+  currentBuild.result = 'FAILURE'
+}
+}
+
+
+
+def notify(status){
+    emailext (
+	to: "sowmyarayapureddy@gmail.com",
+	subject: "${status}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+	 body: """<p>${status}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]':</p>
+	<p>Check console output at <a href='${env.BUILD_URL}'>${env.JOB_NAME} [${env.BUILD_NUMBER}]</a></p>""",
+	"Failed stage name: ${Pipeline_Message}; This needs to be resolved... ${env.BUILD_URL} has result ${currentBuild.result}",
+		)
+	}
